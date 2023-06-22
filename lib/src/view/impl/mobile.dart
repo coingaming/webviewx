@@ -190,18 +190,13 @@ class _WebViewXState extends State<WebViewX> {
       }
     }
 
-    late final wf.PlatformWebViewControllerCreationParams params;
+    wf.PlatformWebViewControllerCreationParams params = const wf.PlatformWebViewControllerCreationParams();
     if (wf.WebViewPlatform.instance is WebKitWebViewPlatform) {
       params = WebKitWebViewControllerCreationParams(
         mediaTypesRequiringUserAction: mediaPlaybackRequiresUserGesture
-            ? {
-                PlaybackMediaTypes.audio,
-                PlaybackMediaTypes.video,
-              }
+            ? {PlaybackMediaTypes.audio, PlaybackMediaTypes.video}
             : const <PlaybackMediaTypes>{},
       );
-    } else {
-      params = const wf.PlatformWebViewControllerCreationParams();
     }
 
     originalWebViewController = wf.WebViewController.fromPlatformCreationParams(params)
