@@ -1,16 +1,15 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:webviewx/src/utils/utils.dart';
-
-import 'package:webview_flutter/platform_interface.dart' as wf_pi;
 import 'package:webview_flutter/webview_flutter.dart' as wf;
-
-import 'package:webviewx/src/view/interface.dart' as view_interface;
-import 'package:webviewx/src/controller/interface.dart' as ctrl_interface;
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:webviewx/src/controller/impl/mobile.dart';
+import 'package:webviewx/src/controller/interface.dart' as ctrl_interface;
+import 'package:webviewx/src/utils/utils.dart';
+import 'package:webviewx/src/view/interface.dart' as view_interface;
 
 /// Mobile implementation
 class WebViewX extends StatefulWidget implements view_interface.WebViewX {
@@ -42,8 +41,7 @@ class WebViewX extends StatefulWidget implements view_interface.WebViewX {
   /// Callback which returns a referrence to the [WebViewXController]
   /// being created.
   @override
-  final Function(ctrl_interface.WebViewXController controller)?
-      onWebViewCreated;
+  final Function(ctrl_interface.WebViewXController controller)? onWebViewCreated;
 
   /// A set of [EmbeddedJsContent].
   ///
@@ -119,8 +117,7 @@ class WebViewX extends StatefulWidget implements view_interface.WebViewX {
     this.dartCallBacks = const {},
     this.ignoreAllGestures = false,
     this.javascriptMode = JavascriptMode.unrestricted,
-    this.initialMediaPlaybackPolicy =
-        AutoMediaPlaybackPolicy.requireUserActionForAllMediaTypes,
+    this.initialMediaPlaybackPolicy = AutoMediaPlaybackPolicy.requireUserActionForAllMediaTypes,
     this.onPageStarted,
     this.onPageFinished,
     this.navigationDelegate,
@@ -142,12 +139,6 @@ class _WebViewXState extends State<WebViewX> {
   @override
   void initState() {
     super.initState();
-
-    if (Platform.isAndroid &&
-        widget.mobileSpecificParams.androidEnableHybridComposition) {
-      wf.WebView.platform = wf.SurfaceAndroidWebView();
-    }
-
     _ignoreAllGestures = widget.ignoreAllGestures;
     webViewXController = _createWebViewXController();
   }
@@ -155,24 +146,18 @@ class _WebViewXState extends State<WebViewX> {
   @override
   Widget build(BuildContext context) {
     final javascriptMode = widget.javascriptMode == JavascriptMode.unrestricted
-        ? wf.JavascriptMode.unrestricted
-        : wf.JavascriptMode.disabled;
+        ? wf.JavaScriptMode.unrestricted
+        : wf.JavaScriptMode.disabled;
 
-    final initialMediaPlaybackPolicy = widget.initialMediaPlaybackPolicy ==
-            AutoMediaPlaybackPolicy.alwaysAllow
-        ? wf.AutoMediaPlaybackPolicy.always_allow
-        : wf.AutoMediaPlaybackPolicy.require_user_action_for_all_media_types;
+    final mediaPlaybackRequiresUserGesture = widget.initialMediaPlaybackPolicy != AutoMediaPlaybackPolicy.alwaysAllow;
 
-    void onWebResourceError(wf_pi.WebResourceError err) =>
-        widget.onWebResourceError!(
+    void onWebResourceError(wf.WebResourceError err) => widget.onWebResourceError!(
           WebResourceError(
             description: err.description,
             errorCode: err.errorCode,
-            domain: err.domain,
             errorType: WebResourceErrorType.values.singleWhere(
               (value) => value.toString() == err.errorType.toString(),
             ),
-            failingUrl: err.failingUrl,
           ),
         );
 
@@ -180,16 +165,14 @@ class _WebViewXState extends State<WebViewX> {
       wf.NavigationRequest request,
     ) async {
       if (widget.navigationDelegate == null) {
-        webViewXController.value =
-            webViewXController.value.copyWith(source: request.url);
+        webViewXController.value = webViewXController.value.copyWith(source: request.url);
         return wf.NavigationDecision.navigate;
       }
 
       final delegate = await widget.navigationDelegate!.call(
         NavigationRequest(
-          content: NavigationContent(
-              request.url, webViewXController.value.sourceType),
-          isForMainFrame: request.isForMainFrame,
+          content: NavigationContent(request.url, webViewXController.value.sourceType),
+          isForMainFrame: request.isMainFrame,
         ),
       );
 
@@ -207,54 +190,70 @@ class _WebViewXState extends State<WebViewX> {
       }
     }
 
-    void onWebViewCreated(wf.WebViewController webViewController) {
-      originalWebViewController = webViewController;
-
-      webViewXController.connector = originalWebViewController;
-      // Calls onWebViewCreated to pass the refference upstream
-      if (widget.onWebViewCreated != null) {
-        widget.onWebViewCreated!(webViewXController);
-      }
+    wf.PlatformWebViewControllerCreationParams params = const wf.PlatformWebViewControllerCreationParams();
+    if (wf.WebViewPlatform.instance is WebKitWebViewPlatform) {
+      params = WebKitWebViewControllerCreationParams(
+        mediaTypesRequiringUserAction: mediaPlaybackRequiresUserGesture
+            ? {PlaybackMediaTypes.audio, PlaybackMediaTypes.video}
+            : const <PlaybackMediaTypes>{},
+      );
     }
 
-    final javascriptChannels = widget.dartCallBacks
-        .map(
-          (cb) => wf.JavascriptChannel(
-            name: cb.name,
-            onMessageReceived: (msg) => cb.callBack(msg.message),
-          ),
-        )
-        .toSet();
+    originalWebViewController = wf.WebViewController.fromPlatformCreationParams(params)
+      ..setJavaScriptMode(javascriptMode)
+      ..setNavigationDelegate(
+        wf.NavigationDelegate(
+          onPageStarted: widget.onPageStarted,
+          onPageFinished: widget.onPageFinished,
+          onNavigationRequest: navigationDelegate,
+          onWebResourceError: onWebResourceError,
+        ),
+      )
+      ..setUserAgent(widget.userAgent)
+      ..loadRequest(
+        Uri.parse(_initialContent()),
+      );
+
+    if (originalWebViewController.platform is AndroidWebViewController) {
+      final debugging = kIsWeb ? widget.webSpecificParams.printDebugInfo : widget.mobileSpecificParams.debuggingEnabled;
+      AndroidWebViewController.enableDebugging(debugging);
+      (originalWebViewController.platform as AndroidWebViewController)
+          .setMediaPlaybackRequiresUserGesture(mediaPlaybackRequiresUserGesture);
+    } else if (originalWebViewController.platform is WebKitWebViewController) {
+      (originalWebViewController.platform as WebKitWebViewController)
+          .setAllowsBackForwardNavigationGestures(widget.mobileSpecificParams.gestureNavigationEnabled);
+    }
+
+    for (final dartCallback in widget.dartCallBacks) {
+      originalWebViewController.addJavaScriptChannel(
+        dartCallback.name,
+        onMessageReceived: (msg) => dartCallback.callBack(msg.message),
+      );
+    }
+
+    webViewXController.connector = originalWebViewController;
+    // Calls onWebViewCreated to pass the refference upstream
+    if (widget.onWebViewCreated != null) {
+      widget.onWebViewCreated?.call(webViewXController);
+    }
 
     return SizedBox(
       width: widget.width,
       height: widget.height,
       child: IgnorePointer(
         ignoring: _ignoreAllGestures,
-        child: wf.WebView(
+        child: wf.WebViewWidget(
           key: widget.key,
-          initialUrl: _initialContent(),
-          javascriptMode: javascriptMode,
-          onWebViewCreated: onWebViewCreated,
-          javascriptChannels: javascriptChannels,
           gestureRecognizers:
-              widget.mobileSpecificParams.mobileGestureRecognizers,
-          onPageStarted: widget.onPageStarted,
-          onPageFinished: widget.onPageFinished,
-          initialMediaPlaybackPolicy: initialMediaPlaybackPolicy,
-          onWebResourceError: onWebResourceError,
-          gestureNavigationEnabled:
-              widget.mobileSpecificParams.gestureNavigationEnabled,
-          debuggingEnabled: widget.mobileSpecificParams.debuggingEnabled,
-          navigationDelegate: navigationDelegate,
-          userAgent: widget.userAgent,
+              widget.mobileSpecificParams.mobileGestureRecognizers ?? <Factory<OneSequenceGestureRecognizer>>{},
+          controller: originalWebViewController,
         ),
       ),
     );
   }
 
   // Returns initial data
-  String? _initialContent() {
+  String _initialContent() {
     if (widget.initialSourceType == SourceType.html) {
       return HtmlUtils.preprocessSource(
         widget.initialContent,
@@ -294,9 +293,9 @@ class _WebViewXState extends State<WebViewX> {
   void _handleChange() {
     final newModel = webViewXController.value;
 
-    originalWebViewController.loadUrl(
-      _prepareContent(newModel),
-      headers: newModel.headers,
+    originalWebViewController.loadRequest(
+      Uri.parse(_prepareContent(newModel)),
+      headers: newModel.headers ?? {},
     );
   }
 
