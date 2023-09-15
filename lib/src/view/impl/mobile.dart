@@ -141,17 +141,14 @@ class _WebViewXState extends State<WebViewX> {
     super.initState();
     _ignoreAllGestures = widget.ignoreAllGestures;
     webViewXController = _createWebViewXController();
-  }
 
-  @override
-  Widget build(BuildContext context) {
     final javascriptMode = widget.javascriptMode == JavascriptMode.unrestricted
         ? wf.JavaScriptMode.unrestricted
         : wf.JavaScriptMode.disabled;
 
     final mediaPlaybackRequiresUserGesture = widget.initialMediaPlaybackPolicy != AutoMediaPlaybackPolicy.alwaysAllow;
 
-    void onWebResourceError(wf.WebResourceError err) => widget.onWebResourceError!(
+    void onWebResourceError(wf.WebResourceError err) => widget.onWebResourceError?.call(
           WebResourceError(
             description: err.description,
             errorCode: err.errorCode,
@@ -236,7 +233,10 @@ class _WebViewXState extends State<WebViewX> {
     if (widget.onWebViewCreated != null) {
       widget.onWebViewCreated?.call(webViewXController);
     }
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return SizedBox(
       width: widget.width,
       height: widget.height,
